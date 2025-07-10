@@ -30,3 +30,8 @@
 *.exe
 *.out
 *.app
+cpp20/.vs
+cpp20/cpp20/x64
+cpp20/cast/x64
+cpp20/go_type_interface/x64
+cpp20/x64
