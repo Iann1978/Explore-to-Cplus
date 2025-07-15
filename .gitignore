@@ -35,3 +35,5 @@ cpp20/cpp20/x64
 cpp20/cast/x64
 cpp20/go_type_interface/x64
 cpp20/x64
+cpp20/coroutine/x64
+cpp20/future/x64
