@@ -3,5 +3,6 @@
   <ItemGroup>
     <ClCompile Include="coroutine.cpp" />
     <ClCompile Include="base5.cpp" />
+    <ClCompile Include="future_awaiter_demo.cpp" />
   </ItemGroup>
 </Project>

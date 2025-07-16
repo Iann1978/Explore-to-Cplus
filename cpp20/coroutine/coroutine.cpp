@@ -3,6 +3,7 @@
 #include <coroutine>
 #include <chrono>
 #include <thread>
+//https://www.scs.stanford.edu/~dm/blog/c++-coroutines.html#coroutine-handles
 //
 //// Awaiter for std::future
 //template<typename T>
@@ -119,11 +120,17 @@
 //}
 
 class Shader;
+
+
+// Helper function to make future awaitable
+
+class FutureAwaiter;
 struct Task {
 	struct promise_type {
 
 		std::exception_ptr exception;
 		Shader* value_;
+		FutureAwaiter* awaiter_ = nullptr;
 
 		Task get_return_object() {
 			std::cout << "create task." << std::endl;
@@ -132,7 +139,7 @@ struct Task {
 			};
 		}
 
-		std::suspend_never initial_suspend() {
+		std::suspend_always initial_suspend() {
 			return {};
 		}
 		std::suspend_always final_suspend() noexcept {
@@ -149,6 +156,8 @@ struct Task {
 		void unhandled_exception() {
 			exception = std::current_exception();
 		}
+
+
 	};
 
 
@@ -165,47 +174,45 @@ struct Task {
 		return h_;
 	}
 };
+struct FutureAwaiter {
+	std::future<std::string> future;
+	// Constructor takes future by value and moves it
+	FutureAwaiter(std::future<std::string>& f) : future(std::move(f)) {
+		std::cout << "FutureAwaiter constructed with future (value)" << std::endl;
+	}
+	bool await_ready() const noexcept {
+		std::cout << "waiting ..." << std::endl;
+		bool ready = future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+		return ready;
+	}
 
-struct ReturnObject2 {
-	struct promise_type {
-		ReturnObject2 get_return_object() {
-			return {
-				// Uses C++20 designated initializer syntax
-				.h_ = std::coroutine_handle<promise_type>::from_promise(*this)
-			};
-		}
-		void return_void()
-		{
-			int a = 0;
-			int b = 0;
-		}
-		std::suspend_never initial_suspend() { return {}; }
-		std::suspend_always final_suspend() noexcept { return {}; }
-		void unhandled_exception() {}
-	};
+	std::string await_resume();
 
-	std::coroutine_handle<promise_type> h_;
+	void await_suspend(std::coroutine_handle<Task::promise_type> h);
+	std::coroutine_handle<Task::promise_type> h_;
 };
+std::string FutureAwaiter::await_resume() {
+	Task::promise_type& promise = h_.promise();
+	promise.awaiter_ = nullptr;
+	std::cout << "we got it." << std::endl;
+	return future.get();
+}
 
-struct ReturnObject5 {
-	struct promise_type {
-		ReturnObject5 get_return_object() {
-			return {
-			  .h_ = std::coroutine_handle<promise_type>::from_promise(*this)
-			};
-		}
-		void return_void()
-		{
-			int a = 0;
-			int b = 0;
-		}
-		std::suspend_never initial_suspend() { return {}; }
-		std::suspend_always final_suspend() noexcept { return {}; }
-		void unhandled_exception() {}
-	};
+void FutureAwaiter::await_suspend(std::coroutine_handle<Task::promise_type> h) {
+	h_ = h;
+	Task::promise_type& promise = h.promise();
+	promise.awaiter_ = this;
 
-	std::coroutine_handle<promise_type> h_;
-};
+
+
+	std::cout << "we still need wait" << std::endl;
+	
+}
+FutureAwaiter operator co_await(std::future<std::string>& future) {
+	std::cout << "operator co_await called with future address: " << &future << std::endl;
+	return FutureAwaiter{ future };
+}
+
 
 
 class Shader
@@ -220,7 +227,7 @@ public:
 	std::string load(std::string filename)
 	{
 		std::cout << "loading " << filename << std::endl;
-		std::this_thread::sleep_for(std::chrono::seconds(1));
+		std::this_thread::sleep_for(std::chrono::seconds(10));
 		std::cout << "loaded  " << filename << std::endl;
 		std::string context = "context of file " + filename;
 		return context;
@@ -264,17 +271,19 @@ public:
 
 		Shader* shader = new Shader(filename);
 		std::cout << "enter CoLoadAndCreate" << std::endl;
-		std::cout << "waiting a" << std::endl;
+
 
 		// load shader context
 		auto futureContext = shader->async_load(filename);
-		while (futureContext.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-		{
-			std::cout << "wait for context loading." << shader->name << std::endl;
-			co_await std::suspend_always{};
-		}
-		std::cout << "context loaded." << std::endl;
-		shader->context = futureContext.get();
+		//while (futureContext.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+		//{
+		//	std::cout << "wait for context loading." << shader->name << std::endl;
+		//	co_await std::suspend_always{};
+		//}
+		//std::cout << "context loaded." << std::endl;
+		//shader->context = futureContext.get();
+
+		shader->context = co_await futureContext;
 
 		// parse shader context
 		auto futureResult = shader->async_parse(filename);
@@ -298,8 +307,8 @@ int main()
 	//Shader* shader0 = Shader::LoadAndCreate("shader0");
 	//Shader* shader1 = Shader::LoadAndCreate("shader1");
 
-	std::coroutine_handle<Task::promise_type> h0 = Shader::CoLoadAndCreate("shader0").h_;
-	std::coroutine_handle<Task::promise_type> h1 = Shader::CoLoadAndCreate("shader0").h_;
+	std::coroutine_handle<Task::promise_type> h0 = Shader::CoLoadAndCreate("shader0");
+	std::coroutine_handle<Task::promise_type> h1 = Shader::CoLoadAndCreate("shader0");
 
 
 	while (true)
@@ -310,12 +319,22 @@ int main()
 
 		if (!h0.done())
 		{
-			h0();
+			auto& promise = h0.promise();
+
+			if (!promise.awaiter_ ||promise.awaiter_->await_ready())
+			{
+				h0();
+			}
+			
 			done = false;
 		}
 		if (!h1.done())
 		{
-			h1();
+			auto& promise = h0.promise();
+			if (!promise.awaiter_ || promise.awaiter_->await_ready())
+			{
+				h1();
+			}
 			done = false;
 		}
 		if (done) break;
